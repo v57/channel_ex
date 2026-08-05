@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+mkdir -p coverage
+
+mix coveralls.lcov
+
+if [[ ! -s cover/lcov.info ]]; then
+  echo "cover/lcov.info was not generated" >&2
+  exit 1
+fi
+
+cp cover/lcov.info coverage/lcov.info
+
+if [[ ! -s coverage/lcov.info ]]; then
+  echo "coverage/lcov.info was not generated" >&2
+  exit 1
+fi
+
+echo "LCOV coverage written to coverage/lcov.info"
