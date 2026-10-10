@@ -74,12 +74,17 @@ defmodule ChannelEx do
 
     merged =
       Enum.reduce(from.other_post_api, merged, fn {path_fun, descriptor}, acc ->
-        post_other(acc, path_fun, descriptor.fun)
+        post_other(acc, scoped_matcher(p, path_fun), descriptor.fun)
       end)
 
     merged =
       Enum.reduce(from.stream_api, merged, fn {key, fun}, acc ->
         stream(acc, p <> key, fun)
+      end)
+
+    merged =
+      Enum.reduce(from.other_stream_api, merged, fn {path_fun, fun}, acc ->
+        stream_other(acc, scoped_matcher(p, path_fun), fun)
       end)
 
     if from.events_api do
@@ -178,6 +183,18 @@ defmodule ChannelEx do
           acc
       end
     end)
+  end
+
+  # A catch-all merged under a prefix only sees paths below it, with the prefix stripped.
+  defp scoped_matcher("", match), do: match
+
+  defp scoped_matcher(p, match) do
+    size = byte_size(p)
+
+    fn
+      <<^p::binary-size(size), rest::binary>> -> match.(rest)
+      _ -> false
+    end
   end
 
   defp prefixed(""), do: ""

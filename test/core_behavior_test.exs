@@ -30,6 +30,32 @@ defmodule ChannelEx.CoreBehaviorTest do
     assert [4, 5] = sender |> ChannelEx.values("dynamic/stream", 4) |> Enum.to_list()
   end
 
+  test "merge keeps post_other/stream_other routes under the prefix" do
+    match = fn path -> String.starts_with?(path, "dyn/") end
+
+    inner =
+      ChannelEx.new()
+      |> ChannelEx.post_other(match, fn %{body: body} -> "post:#{body}" end)
+      |> ChannelEx.stream_other(fn path -> path == "feed" end, fn _ -> [1] end)
+
+    outer = ChannelEx.merge(ChannelEx.new(), inner, "m")
+
+    assert [{scoped, _}] = outer.other_post_api
+    assert scoped.("m/dyn/x")
+    refute scoped.("dyn/x")
+    assert [{stream_scoped, _}] = outer.other_stream_api
+    assert stream_scoped.("m/feed")
+
+    sender = ChannelEx.process(outer)
+    assert {:ok, "post:a"} = ChannelEx.send(sender, "m/dyn/x", "a")
+    assert {:error, _} = ChannelEx.send(sender, "dyn/x", "a")
+    assert [1] = sender |> ChannelEx.values("m/feed") |> Enum.to_list()
+
+    # Without a prefix the matchers are reused as-is
+    flat = ChannelEx.merge(ChannelEx.new(), inner)
+    assert [{^match, _}] = flat.other_post_api
+  end
+
   test "post_async is a compatibility alias and handlers see no task payload" do
     parent = self()
 
