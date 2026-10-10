@@ -12,28 +12,78 @@ defmodule ChannelEx.Client.Socket do
   def stop(pid), do: send(pid, :channel_ex_stop)
   def throttle(_pid), do: :ok
 
-  @impl true
-  def init(opts) do
+  @doc """
+  Opens the TCP connection and performs the websocket handshake in the calling process.
+  Returns `{:ok, socket, rest}` (bytes received after the 101 reply) or `{:error, reason}`;
+  never raises on network errors, a non-101 reply or a silent server.
+  """
+  def open(opts) do
     uri = opts |> Keyword.fetch!(:url) |> URI.parse()
     host = uri.host || "127.0.0.1"
     port = uri.port || 80
     path = ws_path(uri)
     headers = ws_headers(Keyword.get(opts, :headers))
+    timeout = Keyword.get(opts, :connect_timeout, 5_000)
 
-    {:ok, socket} =
-      :gen_tcp.connect(String.to_charlist(host), port, [
-        :binary,
-        {:packet, :raw},
-        {:active, false},
-        {:nodelay, true},
-        {:reuseaddr, true}
-      ])
+    case :gen_tcp.connect(
+           String.to_charlist(host),
+           port,
+           [:binary, {:packet, :raw}, {:active, false}, {:nodelay, true}, {:reuseaddr, true}],
+           timeout
+         ) do
+      {:ok, socket} ->
+        {request, key} = ChannelEx.WebSocket.client_handshake_request(host, port, path, headers)
+        deadline = System.monotonic_time(:millisecond) + timeout
 
-    {request, key} = ChannelEx.WebSocket.client_handshake_request(host, port, path, headers)
-    :ok = :gen_tcp.send(socket, request)
-    :ok = recv_handshake!(socket, key, <<>>)
-    :ok = :inet.setopts(socket, active: :once)
+        result =
+          case :gen_tcp.send(socket, request) do
+            :ok -> recv_handshake(socket, key, <<>>, deadline)
+            {:error, _reason} = error -> error
+          end
 
+        case result do
+          {:ok, rest} ->
+            {:ok, socket, rest}
+
+          {:error, _reason} = error ->
+            :gen_tcp.close(socket)
+            error
+        end
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  @doc "Makes `pid` the socket's controlling process and starts reading."
+  def attach(pid, socket) do
+    with :ok <- :gen_tcp.controlling_process(socket, pid) do
+      send(pid, {:channel_ex_attach, socket})
+      :ok
+    end
+  end
+
+  @impl true
+  def init(opts) do
+    case Keyword.fetch(opts, :socket) do
+      {:ok, socket} ->
+        {:ok, start_peer(opts, socket, Keyword.get(opts, :recv_buffer, <<>>))}
+
+      :error ->
+        # Standalone start_link(url: ...): connect here, and stop cleanly on failure.
+        case open(opts) do
+          {:ok, socket, rest} ->
+            state = start_peer(opts, socket, <<>>)
+            send(self(), {:channel_ex_attach, socket})
+            {:ok, %{state | recv_buffer: rest}}
+
+          {:error, reason} ->
+            {:stop, {:shutdown, reason}}
+        end
+    end
+  end
+
+  defp start_peer(opts, socket, recv_buffer) do
     channel = Keyword.fetch!(opts, :channel)
     {:ok, state_ref} = ChannelEx.ConnectionState.start_link(Keyword.fetch!(opts, :state_ref))
     owner = self()
@@ -46,14 +96,15 @@ defmodule ChannelEx.Client.Socket do
 
     run_on_connect(Keyword.get(opts, :on_connect), peer.sender)
 
-    {:ok,
-     %{
-       socket: socket,
-       connected: true,
-       recv_buffer: <<>>,
-       peer: peer,
-       publisher_refs: publisher_refs
-     }}
+    %{
+      socket: socket,
+      connected: true,
+      recv_buffer: recv_buffer,
+      fragments: nil,
+      max_payload: Keyword.get(opts, :max_payload, ChannelEx.WebSocket.default_max_payload()),
+      peer: peer,
+      publisher_refs: publisher_refs
+    }
   end
 
   @impl true
@@ -112,17 +163,29 @@ defmodule ChannelEx.Client.Socket do
     {:noreply, drain_peer_outgoing(%{state | peer: peer}, outgoing)}
   end
 
+  def handle_info({:channel_ex_attach, socket}, %{socket: socket} = state) do
+    # Bytes that arrived together with the 101 reply are processed first.
+    state = if state.recv_buffer == <<>>, do: state, else: process_recv_buffer(state)
+
+    with true <- state.connected,
+         :ok <- :inet.setopts(socket, active: :once) do
+      {:noreply, state}
+    else
+      _ -> {:stop, :normal, %{state | connected: false}}
+    end
+  end
+
   def handle_info({:tcp, socket, data}, %{socket: socket} = state) do
     state =
       state
       |> Map.update!(:recv_buffer, &(&1 <> data))
       |> process_recv_buffer()
 
-    if state.connected do
-      :ok = :inet.setopts(socket, active: :once)
+    with true <- state.connected,
+         :ok <- :inet.setopts(socket, active: :once) do
       {:noreply, state}
     else
-      {:stop, :normal, state}
+      _ -> {:stop, :normal, %{state | connected: false}}
     end
   end
 
@@ -211,37 +274,48 @@ defmodule ChannelEx.Client.Socket do
       |> IO.iodata_to_binary()
       |> then(&ChannelEx.WebSocket.encode_text(&1, true))
 
-    :ok = :gen_tcp.send(socket, payload)
-    state
+    case :gen_tcp.send(socket, payload) do
+      :ok -> state
+      {:error, _reason} -> %{state | connected: false}
+    end
   end
 
   defp send_peer_outgoing(state, _outgoing), do: state
 
   defp process_recv_buffer(state) do
-    case ChannelEx.WebSocket.decode_frames(state.recv_buffer) do
-      {:ok, frames, rest} ->
-        Enum.reduce(frames, %{state | recv_buffer: rest}, fn frame, acc ->
-          handle_frame(acc, frame)
-        end)
+    with {:ok, frames, rest} <-
+           ChannelEx.WebSocket.decode_frames(state.recv_buffer, state.max_payload),
+         {:ok, frames, fragments} <-
+           ChannelEx.WebSocket.reassemble(frames, state.fragments, state.max_payload) do
+      Enum.reduce(frames, %{state | recv_buffer: rest, fragments: fragments}, fn frame, acc ->
+        if acc.connected, do: handle_frame(acc, frame), else: acc
+      end)
+    else
+      :more -> state
+      {:error, _reason} -> %{state | connected: false}
+    end
+  end
 
-      :more ->
-        state
+  # Binary replies carry the same JSON as text ones (the TS client would drop them and
+  # leave the call pending forever).
+  defp handle_frame(state, {kind, payload}) when kind in [:text, :binary] do
+    case ChannelEx.Wire.decode_messages(payload) do
+      {:ok, messages} ->
+        {peer, outgoing} = ChannelEx.Peer.receive_messages(state.peer, messages)
+        send_peer_outgoing(%{state | peer: peer}, outgoing)
 
-      {:error, _reason} ->
+      # An undecodable reply can't be matched to its request: close the connection so
+      # every pending call settles with "disconnected" instead of hanging.
+      :error ->
         %{state | connected: false}
     end
   end
 
-  defp handle_frame(state, {:text, payload}) do
-    messages = ChannelEx.Wire.decode_any(payload)
-    {peer, outgoing} = ChannelEx.Peer.receive_messages(state.peer, messages)
-    send_peer_outgoing(%{state | peer: peer}, outgoing)
-  end
-
   defp handle_frame(state, {:ping, payload}) do
-    encoded = ChannelEx.WebSocket.encode_pong(payload, true)
-    :ok = :gen_tcp.send(state.socket, encoded)
-    state
+    case :gen_tcp.send(state.socket, ChannelEx.WebSocket.encode_pong(payload, true)) do
+      :ok -> state
+      {:error, _reason} -> %{state | connected: false}
+    end
   end
 
   defp handle_frame(state, {:pong, _payload}), do: state
@@ -284,17 +358,21 @@ defmodule ChannelEx.Client.Socket do
     _ -> []
   end
 
-  defp recv_handshake!(socket, key, buffer) do
+  defp recv_handshake(socket, key, buffer, deadline) do
     case ChannelEx.WebSocket.parse_http_response(buffer, key) do
-      {:ok, _headers, _rest} ->
-        :ok
+      {:ok, _headers, rest} ->
+        {:ok, rest}
 
       :more ->
-        {:ok, data} = :gen_tcp.recv(socket, 0, 5_000)
-        recv_handshake!(socket, key, buffer <> data)
+        remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+
+        case :gen_tcp.recv(socket, 0, remaining) do
+          {:ok, data} -> recv_handshake(socket, key, buffer <> data, deadline)
+          {:error, reason} -> {:error, {:handshake_failed, reason}}
+        end
 
       {:error, reason} ->
-        raise "websocket handshake failed: #{inspect(reason)}"
+        {:error, {:handshake_failed, reason}}
     end
   end
 

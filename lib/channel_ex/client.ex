@@ -36,17 +36,39 @@ defmodule ChannelEx.Client do
     connect(channel, "ws://127.0.0.1:#{port}", options)
   end
 
+  @doc """
+  Connects and returns a `%ChannelEx.ClientSender{}`, or `{:error, reason}` when the TCP
+  connection or the websocket handshake fails (refused, non-101 reply, silent server).
+  The caller is linked to the socket process only after a successful handshake, so a
+  failed connect never crashes the caller.
+  """
   def connect(channel, address, options) when is_binary(address) do
-    {:ok, socket} =
-      ChannelEx.Client.Socket.start_link(
-        channel: channel,
-        url: address,
-        headers: Keyword.get(options, :headers),
-        on_connect: Keyword.get(options, :on_connect),
-        state_ref: Keyword.get(options, :state, %{})
-      )
+    opts = [
+      channel: channel,
+      url: address,
+      headers: Keyword.get(options, :headers),
+      on_connect: Keyword.get(options, :on_connect),
+      state_ref: Keyword.get(options, :state, %{}),
+      connect_timeout: Keyword.get(options, :connect_timeout, 5_000),
+      max_payload: Keyword.get(options, :max_payload, ChannelEx.WebSocket.default_max_payload())
+    ]
 
-    sender = ChannelEx.Client.Socket.sender(socket)
-    %ChannelEx.ClientSender{sender: sender, ws: socket}
+    with {:ok, socket, rest} <- ChannelEx.Client.Socket.open(opts),
+         {:ok, pid} <-
+           ChannelEx.Client.Socket.start_link(opts ++ [socket: socket, recv_buffer: rest]) do
+      case ChannelEx.Client.Socket.attach(pid, socket) do
+        :ok ->
+          try do
+            %ChannelEx.ClientSender{sender: ChannelEx.Client.Socket.sender(pid), ws: pid}
+          catch
+            # The server closed the connection right after the handshake.
+            :exit, _reason -> {:error, :closed}
+          end
+
+        {:error, _reason} = error ->
+          ChannelEx.Client.Socket.stop(pid)
+          error
+      end
+    end
   end
 end

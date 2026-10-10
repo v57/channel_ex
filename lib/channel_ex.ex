@@ -105,6 +105,9 @@ defmodule ChannelEx do
     ChannelEx.Sender.send(sender, path, body, context, timeout)
   end
 
+  # A failed `connect/3` returns `{:error, reason}`; sending on it reports that reason.
+  def send({:error, _reason} = error, _path, _body, _context, _timeout), do: error
+
   def values(target, path, body \\ nil, context \\ nil)
 
   def values(%ChannelEx.ClientSender{} = client, path, body, context) do

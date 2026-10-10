@@ -17,6 +17,30 @@ defmodule ChannelEx.Wire do
     end
   end
 
+  @doc """
+  Decodes a frame payload into a list of message maps without raising.
+
+  Invalid JSON (or invalid UTF-8, too-deep nesting, ...) returns `:error`; non-object
+  elements such as `null`, `123` or `"str"` are dropped.
+  """
+  def decode_messages(payload) when is_binary(payload) do
+    decoded =
+      try do
+        {:ok, decode_any(payload)}
+      rescue
+        _ -> :error
+      catch
+        _, _ -> :error
+      end
+
+    case decoded do
+      {:ok, messages} when is_list(messages) -> {:ok, Enum.filter(messages, &is_map/1)}
+      {:ok, message} when is_map(message) -> {:ok, [message]}
+      {:ok, _other} -> {:ok, []}
+      :error -> :error
+    end
+  end
+
   def fast_decode(payload) when is_binary(payload) do
     case parse_payload(payload) do
       {:ok, decoded} -> {:ok, decoded}

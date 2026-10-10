@@ -182,13 +182,58 @@ defmodule ChannelEx.Core do
     end
   end
 
+  # Exceptions raised by the runtime itself (a handler that doesn't match its input, a bad
+  # pattern match, ...) describe server internals ("no function clause matching in ...").
+  # They are logged and replaced by a generic message; errors a handler raises on purpose
+  # (`raise "unauthorized"`, custom exceptions) still reach the client as their message.
+  @internal_errors [
+    FunctionClauseError,
+    CaseClauseError,
+    CondClauseError,
+    WithClauseError,
+    TryClauseError,
+    MatchError,
+    BadMapError,
+    BadStructError,
+    BadFunctionError,
+    BadArityError,
+    BadBooleanError,
+    UndefinedFunctionError,
+    KeyError,
+    ArithmeticError,
+    Protocol.UndefinedError,
+    ErlangError,
+    SystemLimitError
+  ]
+
   defp run_safe(fun) when is_function(fun, 0) do
     try do
       {:ok, fun.()}
     rescue
-      error -> {:error, Exception.message(error)}
+      error ->
+        if error.__struct__ in @internal_errors do
+          require Logger
+
+          Logger.warning(
+            "channel_ex handler failed: " <> Exception.format(:error, error, __STACKTRACE__)
+          )
+
+          {:error, "internal error"}
+        else
+          {:error, Exception.message(error)}
+        end
     catch
-      kind, reason -> {:error, "#{kind}: #{inspect(reason)}"}
+      :throw, value when is_binary(value) ->
+        {:error, value}
+
+      kind, reason ->
+        require Logger
+
+        Logger.warning(
+          "channel_ex handler failed: " <> Exception.format(kind, reason, __STACKTRACE__)
+        )
+
+        {:error, "internal error"}
     end
   end
 
