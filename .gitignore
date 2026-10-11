@@ -28,3 +28,5 @@ channel_ex-*.tar
 
 # macOS
 .DS_Store
+CLAUDE.md
+/.claude
