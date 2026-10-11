@@ -56,8 +56,7 @@ sender =
 
 # Implementation
 
-- client transport (`:gun`)
-- server transport (`:cowboy`)
+- client and server WebSocket transports, written on `:gen_tcp`
 - process (in-memory) transport
 - fast JSON (`:jiffy`, with `Jason` fallback)
 
