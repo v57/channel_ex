@@ -15,6 +15,11 @@ def deps do
 end
 ```
 
+# Dependencies
+
+[jiffy](https://hex.pm/packages/jiffy) (fast JSON, a C NIF) with [jason](https://hex.pm/packages/jason) as the
+fallback encoder. The WebSocket client and server are written on `:gen_tcp`. `excoveralls` is for the tests only.
+
 # Usage
 
 ```elixir
