@@ -127,6 +127,15 @@ defmodule ChannelEx do
     ChannelEx.Server.listen(channel, address, options)
   end
 
+  @doc """
+  Serves the channel over QUIC (experimental, see `ChannelEx.Quic`). Needs the optional
+  `:quicer` dependency, a `:key` and a `:cert` (PEM); takes the same `:state`, `:on_connect`,
+  `:on_disconnect` and `:max_payload` options as `listen/3`.
+  """
+  def listen_quic(%__MODULE__{} = channel, address, options) do
+    ChannelEx.Quic.listen(channel, address, options)
+  end
+
   def process(%__MODULE__{} = channel, options \\ []) do
     ChannelEx.Process.process(channel, options)
   end

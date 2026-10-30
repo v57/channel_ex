@@ -1,11 +1,15 @@
 defmodule ChannelEx.Test.TSFixture do
   @moduledoc false
 
-  def start! do
+  @doc """
+  Starts `../channel/tests/server.ts` on `port` (WebSocket on TCP, QUIC on UDP) and waits for
+  it. When a fixture already listens there, that one answers and the new one exits.
+  """
+  def start!(port \\ 2049) do
     bun = System.find_executable("bun") || raise "bun executable not found"
     channel_dir = Path.expand("../../../channel", __DIR__)
 
-    port =
+    fixture =
       Port.open(
         {:spawn_executable, bun},
         [
@@ -13,12 +17,13 @@ defmodule ChannelEx.Test.TSFixture do
           :exit_status,
           :stderr_to_stdout,
           {:cd, String.to_charlist(channel_dir)},
+          {:env, [{~c"CHANNEL_TEST_PORT", ~c"#{port}"}]},
           args: ["tests/server.ts"]
         ]
       )
 
-    wait_until_ready!()
-    port
+    wait_until_ready!(~c"127.0.0.1", port)
+    fixture
   end
 
   def stop(port) do
@@ -34,7 +39,7 @@ defmodule ChannelEx.Test.TSFixture do
   end
 
   defp do_wait_until_ready!(_host, _port, 0),
-    do: raise("timed out waiting for tests/server.ts on 127.0.0.1:2049")
+    do: raise("timed out waiting for tests/server.ts")
 
   defp do_wait_until_ready!(host, port, tries_left) do
     case :gen_tcp.connect(host, port, [:binary, {:active, false}], 100) do

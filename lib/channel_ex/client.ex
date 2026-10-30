@@ -42,6 +42,10 @@ defmodule ChannelEx.Client do
   The caller is linked to the socket process only after a successful handshake, so a
   failed connect never crashes the caller.
   """
+  def connect(channel, "quic://" <> _ = address, options) do
+    ChannelEx.Quic.connect(channel, address, options)
+  end
+
   def connect(channel, address, options) when is_binary(address) do
     opts = [
       channel: channel,

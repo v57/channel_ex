@@ -29,6 +29,7 @@ defmodule ChannelEx.MixProject do
     [
       {:jiffy, "~> 1.1"},
       {:jason, "~> 1.4"},
+      {:quicer, "~> 0.4.12", optional: true},
       {:excoveralls, "~> 0.18", only: :test}
     ]
   end
