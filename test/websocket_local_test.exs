@@ -12,6 +12,7 @@ defmodule ChannelEx.WebSocketLocalTest do
       ChannelEx.new()
       |> ChannelEx.post("hello", fn _ -> "world" end)
       |> ChannelEx.post("echo", fn %{body: body} -> body end)
+      |> ChannelEx.post("nil", fn _ -> nil end)
       |> ChannelEx.post("state/check", fn %{state: state_ref} ->
         ChannelEx.ConnectionState.get(state_ref).header_wins
       end)
@@ -63,6 +64,11 @@ defmodule ChannelEx.WebSocketLocalTest do
   test "request response and state", %{client: client} do
     assert {:ok, "world"} = ChannelEx.send(client, "hello")
     assert {:ok, 5} = ChannelEx.send(client, "echo", 5)
+    assert {:ok, nil} = ChannelEx.send(client, "nil")
+    # A float keeps the body off the fast path, so the JSON library reads it on both sides
+    assert {:ok, %{"a" => nil, "b" => 1.5}} =
+             ChannelEx.send(client, "echo", %{"a" => nil, "b" => 1.5})
+
     assert {:ok, true} = ChannelEx.send(client, "state/check")
     assert {:ok, "tester"} = ChannelEx.send(client, "auth", %{"name" => "tester"})
     assert {:ok, "tester"} = ChannelEx.send(client, "auth/name")

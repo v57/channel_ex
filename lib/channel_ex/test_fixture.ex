@@ -52,4 +52,14 @@ defmodule ChannelEx.Test.TSFixture do
         do_wait_until_ready!(host, port, tries_left - 1)
     end
   end
+
+  @doc """
+  Runs `test/support/ts_client.ts`, the TypeScript reference's client, against an Elixir server
+  at `address` and returns `{output, status}`; the output's last line is what came back, as JSON.
+  """
+  def run_client(address, cert \\ nil) do
+    bun = System.find_executable("bun") || raise "bun executable not found"
+    script = Path.expand("../../test/support/ts_client.ts", __DIR__)
+    System.cmd(bun, [script, address | List.wrap(cert)])
+  end
 end

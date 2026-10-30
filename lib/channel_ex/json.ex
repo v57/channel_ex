@@ -2,9 +2,11 @@ defmodule ChannelEx.JSON do
   @moduledoc false
 
   if Code.ensure_loaded?(:jiffy) do
+    # :use_nil makes jiffy write nil as null and read null as nil, like Jason; without it nil
+    # goes out as the string "nil" and null comes back as :null.
     def encode!(value) do
       try do
-        :jiffy.encode(value)
+        :jiffy.encode(value, [:use_nil])
       rescue
         _ -> Jason.encode!(value)
       catch
@@ -13,7 +15,7 @@ defmodule ChannelEx.JSON do
     end
 
     def decode!(binary) when is_binary(binary) do
-      :jiffy.decode(binary, [:return_maps])
+      :jiffy.decode(binary, [:return_maps, :use_nil])
     end
   else
     def encode!(value) do

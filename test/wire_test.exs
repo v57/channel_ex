@@ -32,6 +32,25 @@ defmodule ChannelEx.WireTest do
              ~s([{"id":1,"path":"hello","body":{"name":"dimas"}},{"id":2,"done":true}])
   end
 
+  test "nil goes out as null and null comes back as nil" do
+    assert ~s({"id":1,"body":null}) ==
+             IO.iodata_to_binary(ChannelEx.Wire.encode!([%{id: 1, body: nil}]))
+
+    assert ~s({"id":2,"topic":"ticks/a","body":null}) ==
+             IO.iodata_to_binary(ChannelEx.Wire.encode!(%{id: 2, topic: "ticks/a", body: nil}))
+
+    assert ~s({"a":[null]}) == ChannelEx.JSON.encode!(%{"a" => [nil]})
+
+    # The fast path, then the JSON library for what it doesn't parse (a float, keys out of order)
+    assert [%{id: 3, body: nil}] = ChannelEx.Wire.decode_any(~s({"id":3,"body":null}))
+
+    assert [%{"id" => 4, "body" => %{"a" => nil, "b" => 1.5}}] =
+             ChannelEx.Wire.decode_any(~s({"id":4,"body":{"a":null,"b":1.5}}))
+
+    assert [%{"body" => nil, "id" => 5}] = ChannelEx.Wire.decode_any(~s({"body":null,"id":5}))
+    assert nil == ChannelEx.JSON.decode!("null")
+  end
+
   test "websocket codec round trips masked and unmasked text frames" do
     encoded =
       "hello"

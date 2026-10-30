@@ -24,6 +24,7 @@ if ChannelEx.Quic.available?() do
         ChannelEx.new()
         |> ChannelEx.post("hello", fn _ -> "world" end)
         |> ChannelEx.post("echo", fn %{body: body} -> body end)
+        |> ChannelEx.post("nil", fn _ -> nil end)
         |> ChannelEx.post("name", fn %{state: state} ->
           ChannelEx.ConnectionState.get(state)["x-name"]
         end)
@@ -85,6 +86,7 @@ if ChannelEx.Quic.available?() do
       assert {:ok, "world"} = ChannelEx.send(client, "hello")
       body = %{"list" => [1, "two", true], "text" => String.duplicate("é", 20_000)}
       assert {:ok, ^body} = ChannelEx.send(client, "echo", body)
+      assert {:ok, nil} = ChannelEx.send(client, "nil")
 
       # hello headers become the state, names lowercased
       assert {:ok, "elixir"} = ChannelEx.send(client, "name")
@@ -259,6 +261,24 @@ if ChannelEx.Quic.available?() do
       assert responses == %{1 => "raw", 2 => "world"}
     end
 
+    test "raw frames: a nil response and a nil snapshot go out as null", context do
+      server = listen(context)
+      {_conn, stream} = raw_session(server)
+
+      raw_send(stream, [
+        Frame.encode(~s({"hello":{}})),
+        Frame.encode(~s({"id":1,"path":"nil"})),
+        Frame.encode(~s({"id":2,"sub":"ticks","body":"a"}))
+      ])
+
+      frames = read_frames(stream, 2)
+      assert ~s({"id":1,"body":null}) in frames
+      assert ~s({"id":2,"topic":"ticks/a","body":null}) in frames
+
+      assert [%{id: 1, body: nil}, %{id: 2, topic: "ticks/a", body: nil}] =
+               frames |> Enum.flat_map(&ChannelEx.Wire.decode_any/1) |> Enum.sort_by(& &1.id)
+    end
+
     test "one stream per connection", context do
       server = listen(context)
       {conn, stream} = raw_session(server)
@@ -397,15 +417,14 @@ if ChannelEx.Quic.available?() do
       end
 
       test "client calls this server", context do
-        bun = System.find_executable("bun") || flunk("bun isn't installed")
         server = listen(context)
-        script = Path.expand("support/quic_client.ts", __DIR__)
         test = self()
 
         task =
           Task.async(fn ->
-            System.cmd(bun, [script, "#{server.listener.port}", Path.join(@cert_dir, "cert.pem")],
-              stderr_to_stdout: false
+            ChannelEx.Test.TSFixture.run_client(
+              address(server),
+              Path.join(@cert_dir, "cert.pem")
             )
           end)
 
@@ -417,12 +436,15 @@ if ChannelEx.Quic.available?() do
         {output, status} = Task.await(task, 30_000)
         assert status == 0, output
 
+        # nil reaches the TypeScript client as null, not as the string "nil"
         assert %{
                  "hello" => "world",
                  "echo" => %{"a" => [1, "b"]},
                  "name" => "ts",
+                 "nil" => nil,
                  "values" => [0, 1, 2],
-                 "event" => "tick"
+                 "event" => "tick",
+                 "snapshot" => nil
                } ==
                  output
                  |> String.trim()
