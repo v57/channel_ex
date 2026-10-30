@@ -98,8 +98,9 @@ such as HubServer take one connection per client address and port). The client s
 and both sides close a connection after 30 s of silence. Like this port's WebSocket client, the QUIC client
 doesn't reconnect: when the connection drops, pending calls fail with `"disconnected"`.
 
-`ChannelEx.Quic.available?/0` tells whether the build has QUIC. For the languages that support QUIC, see
-`channel/docs/quic.md`.
+`ChannelEx.Quic.available?/0` tells whether the build has QUIC. 
+Languages with QUIC: TypeScript, Go, Swift, C#, Rust, Python, Elixir, Java, Kotlin, C and Zig; Dart, Ruby and PHP stay
+on WebSocket (libraries and status in `channel/docs/quic.md`).
 
 # Implementation
 
